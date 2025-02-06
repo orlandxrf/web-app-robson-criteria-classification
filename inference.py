@@ -1,8 +1,6 @@
 from transformers import AutoModelForTokenClassification
 from transformers import AutoTokenizer
-from transformers import pipeline
 import torch
-from datasets import load_from_disk
 
 
 class Inference:
@@ -35,6 +33,46 @@ class Inference:
             self.device
         )
 
+    def get_entities(self, word_labels: tuple[str, str]) -> list[tuple[str, str]]:
+        """
+        Retrieve the entities predicted by the model
+
+        Args:
+            word_labels (tuple): A list with the word and correspondig label [(word, label)]
+
+        Returns:
+            result (tuple): A list with the idnetified entities: [("label", "entity text")]
+        """
+        entities = []
+        entity = {}
+        result = []
+        for word, label in word_labels:
+            if "O" not in label:
+                start, tag = label.split("-")
+                if start == "B":
+                    if len(entity) > 0:
+                        entities.append(entity)
+                        entity = {}
+                    entity[tag] = word
+                elif start == "I":
+                    if (
+                        tag not in entity
+                    ):  # a new entity without the B-tag, all tags with I-tag only
+                        entities.append(entity)
+                        entity = {}
+                        entity[tag] = word
+                    else:  # entity with a previous B-tag and here with I-tags
+                        entity[tag] += f" {word}"
+            else:
+                if len(entity) > 0:
+                    entities.append(entity)
+                    entity = {}
+
+        for e in entities:
+            if len(e) > 0:
+                result.append((list(e.keys())[0], list(e.values())[0]))
+        return result
+
     def predict(
         self,
         text: str,
@@ -48,7 +86,9 @@ class Inference:
         Returns:
             list: The list of predicted labels
         """
-        inputs = self.tokenizer(text, return_tensors="pt", truncation=True).to(self.device)
+        inputs = self.tokenizer(text, return_tensors="pt", truncation=True).to(
+            self.device
+        )
 
         # get model predictions
         with torch.no_grad():
@@ -62,8 +102,10 @@ class Inference:
         id_to_label = self.model.config.id2label
 
         # decoding the tokens and removing the underscore "▁" used by XLM-RoBERTa
-        tokens = self.tokenizer.convert_ids_to_tokens(inputs["input_ids"].squeeze().tolist())
-        
+        tokens = self.tokenizer.convert_ids_to_tokens(
+            inputs["input_ids"].squeeze().tolist()
+        )
+
         # join subtokens to form words and get the predicted labels
         word_labels = []
         current_word = ""
@@ -91,8 +133,13 @@ class Inference:
 
         # show the predicted labels
         result = []
-        for word, label in word_labels:
-            label = int(label.split('_')[1])
-            result.append((word, self.model.config.id2label[label]))
 
-        return result
+        for word, label in word_labels:
+            result.append(word)
+        result = " ".join(result)
+
+        entities = self.get_entities(word_labels)
+        for _, ent_text in entities:
+            result = result.replace(ent_text, f"``{ent_text}``")
+
+        return result, entities
